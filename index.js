@@ -441,6 +441,8 @@ bot.on('callback_query', async (query) => {
         return;
       }
       
+
+      
       const message = `👥Все данные пользователей:\n\n` +
         users.map(user => 
           `Телефон: ${user.phone_number}\n` +
