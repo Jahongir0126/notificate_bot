@@ -12,22 +12,24 @@ const pool = new Pool({
 
 // Создание таблиц при запуске
 async function initDatabase() {
-  const client = await pool.connect();
   try {
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        telegram_id BIGINT UNIQUE,
-        phone_number VARCHAR(20),
-        first_name VARCHAR(100),
-        last_name VARCHAR(100),
-        passport_number VARCHAR(50),
-        visa_expiry_date DATE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-  } finally {
-    client.release();
+    await createTables();
+    
+    // Проверяем, есть ли уже администраторы
+    const admins = await getAllAdmins();
+    if (admins.length === 0) {
+      // Если администраторов нет, добавляем первого из переменной окружения
+      const adminChatId = process.env.ADMIN_CHAT_ID;
+      if (adminChatId) {
+        await addAdmin(adminChatId, 'main_admin', adminChatId);
+        console.log('First admin added successfully');
+      }
+    }
+    
+    console.log('Database initialized successfully');
+  } catch (error) {
+    console.error('Error initializing database:', error);
+    throw error;
   }
 }
 
@@ -112,11 +114,95 @@ async function getUserByTelegramId(telegramId) {
   }
 }
 
+// Создание таблиц
+async function createTables() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        telegram_id BIGINT UNIQUE,
+        phone_number VARCHAR(20),
+        first_name VARCHAR(100),
+        last_name VARCHAR(100),
+        passport_number VARCHAR(20),
+        visa_expiry_date DATE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS admins (
+        id SERIAL PRIMARY KEY,
+        telegram_id BIGINT UNIQUE,
+        username VARCHAR(100),
+        added_by BIGINT,
+        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    console.log('Tables created successfully');
+  } catch (error) {
+    console.error('Error creating tables:', error);
+    throw error;
+  }
+}
+
+// Функции для работы с администраторами
+async function addAdmin(telegramId, username, addedBy) {
+  try {
+    const result = await pool.query(
+      'INSERT INTO admins (telegram_id, username, added_by) VALUES ($1, $2, $3) RETURNING *',
+      [telegramId, username, addedBy]
+    );
+    return result.rows[0];
+  } catch (error) {
+    console.error('Error adding admin:', error);
+    throw error;
+  }
+}
+
+async function removeAdmin(telegramId) {
+  try {
+    const result = await pool.query(
+      'DELETE FROM admins WHERE telegram_id = $1 RETURNING *',
+      [telegramId]
+    );
+    return result.rows[0];
+  } catch (error) {
+    console.error('Error removing admin:', error);
+    throw error;
+  }
+}
+
+async function isAdmin(telegramId) {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM admins WHERE telegram_id = $1',
+      [telegramId]
+    );
+    return result.rows.length > 0;
+  } catch (error) {
+    console.error('Error checking admin status:', error);
+    throw error;
+  }
+}
+
+async function getAllAdmins() {
+  try {
+    const result = await pool.query('SELECT * FROM admins ORDER BY added_at DESC');
+    return result.rows;
+  } catch (error) {
+    console.error('Error getting all admins:', error);
+    throw error;
+  }
+}
+
 module.exports = {
   initDatabase,
   getAllUsers,
   addUser,
   getExpiringVisas,
   getUsersByWeek,
-  getUserByTelegramId
+  getUserByTelegramId,
+  addAdmin,
+  removeAdmin,
+  isAdmin,
+  getAllAdmins
 }; 

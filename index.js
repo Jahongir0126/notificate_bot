@@ -58,7 +58,8 @@ const validators = {
 // Обработка команды /start
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
-  const isAdmin = chatId.toString() === process.env.ADMIN_CHAT_ID;
+  
+  const isAdmin = await db.isAdmin(chatId);
   
   // Сбрасываем состояние пользователя при команде /start
   userStates.delete(chatId);
@@ -69,7 +70,8 @@ bot.onText(/\/start/, async (msg) => {
         keyboard: [
           ['📊 Получить данные'],
           ['➕ Добавить данные'],
-          ['🔍 Проверка сроков']
+          ['🔍 Проверка сроков'],
+          ['👥 Управление админами']
         ],
         resize_keyboard: true
       }
@@ -92,7 +94,7 @@ bot.onText(/\/start/, async (msg) => {
 // Обработка данных от пользователей
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
-  const isAdmin = chatId.toString() === process.env.ADMIN_CHAT_ID;
+  const isAdmin = await db.isAdmin(chatId);
   
   // Обработка команд пользователя
   if (msg.text === '📝 Добавить данные') {
@@ -147,16 +149,98 @@ bot.on('message', async (msg) => {
     } else if (msg.text === '🔍 Проверка сроков') {
       checkExpiringVisas(chatId);
       return;
+    } else if (msg.text === '👥 Управление админами') {
+      handleAdminManagement(chatId);
+      return;
+    } else if (msg.text === '➕ Добавить админа') {
+      userStates.set(chatId, { step: 'add_admin_id' });
+      bot.sendMessage(chatId, 'Введите Telegram ID нового администратора:');
+      return;
+    } else if (msg.text === '❌ Удалить админа') {
+      userStates.set(chatId, { step: 'remove_admin_id' });
+      bot.sendMessage(chatId, 'Введите Telegram ID администратора для удаления:');
+      return;
+    } else if (msg.text === '📋 Список админов') {
+      handleListAdmins(chatId);
+      return;
+    } else if (msg.text === '◀️ Назад') {
+      const keyboard = {
+        reply_markup: {
+          keyboard: [
+            ['📊 Получить данные'],
+            ['➕ Добавить данные'],
+            ['🔍 Проверка сроков'],
+            ['👥 Управление админами']
+          ],
+          resize_keyboard: true
+        }
+      };
+      bot.sendMessage(chatId, 'Главное меню:', keyboard);
+      return;
     }
   }
 
-  const userState = userStates.get(chatId);
-  if (!userState) return;
+  // Обработка состояний пользователя
+  const state = userStates.get(chatId);
+  if (!state) return;
+
+  // Обработка добавления администратора
+  if (state.step === 'add_admin_id') {
+    const adminId = parseInt(msg.text);
+    if (isNaN(adminId)) {
+      bot.sendMessage(chatId, 'Пожалуйста, введите корректный Telegram ID (только цифры)');
+      return;
+    }
+    
+    userStates.set(chatId, { 
+      step: 'add_admin_username',
+      adminId: adminId
+    });
+    bot.sendMessage(chatId, 'Введите username нового администратора (без @):');
+    return;
+  }
+  
+  if (state.step === 'add_admin_username') {
+    try {
+      await db.addAdmin(state.adminId, msg.text, chatId);
+      bot.sendMessage(chatId, `Администратор успешно добавлен!\nID: ${state.adminId}\nUsername: ${msg.text}`);
+      userStates.delete(chatId);
+      handleAdminManagement(chatId);
+    } catch (error) {
+      console.error('Error adding admin:', error);
+      bot.sendMessage(chatId, 'Произошла ошибка при добавлении администратора. Пожалуйста, попробуйте позже.');
+    }
+    return;
+  }
+  
+  // Обработка удаления администратора
+  if (state.step === 'remove_admin_id') {
+    const adminId = parseInt(msg.text);
+    if (isNaN(adminId)) {
+      bot.sendMessage(chatId, 'Пожалуйста, введите корректный Telegram ID (только цифры)');
+      return;
+    }
+    
+    try {
+      const removedAdmin = await db.removeAdmin(adminId);
+      if (removedAdmin) {
+        bot.sendMessage(chatId, `Администратор успешно удален!\nID: ${adminId}`);
+      } else {
+        bot.sendMessage(chatId, 'Администратор с таким ID не найден.');
+      }
+      userStates.delete(chatId);
+      handleAdminManagement(chatId);
+    } catch (error) {
+      console.error('Error removing admin:', error);
+      bot.sendMessage(chatId, 'Произошла ошибка при удалении администратора. Пожалуйста, попробуйте позже.');
+    }
+    return;
+  }
 
   // Обработка контакта
-  if (msg.contact && userState.step === 'phone') {
-    userState.phone = msg.contact.phone_number;
-    userState.step = 'firstName';
+  if (msg.contact && state.step === 'phone') {
+    state.phone = msg.contact.phone_number;
+    state.step = 'firstName';
     bot.sendMessage(chatId, 'Введите имя:');
     return;
   }
@@ -164,15 +248,15 @@ bot.on('message', async (msg) => {
   // Обработка ввода данных
   if (isAdmin) {
     // Обработка ввода данных администратором
-    switch (userState.step) {
+    switch (state.step) {
       case 'admin_phone':
         const adminPhoneValidation = validators.phone(msg.text);
         if (!adminPhoneValidation.isValid) {
           bot.sendMessage(chatId, adminPhoneValidation.message);
           return;
         }
-        userState.phone = adminPhoneValidation.value;
-        userState.step = 'admin_firstName';
+        state.phone = adminPhoneValidation.value;
+        state.step = 'admin_firstName';
         bot.sendMessage(chatId, 'Введите имя пользователя:');
         break;
       case 'admin_firstName':
@@ -181,8 +265,8 @@ bot.on('message', async (msg) => {
           bot.sendMessage(chatId, adminFirstNameValidation.message);
           return;
         }
-        userState.firstName = adminFirstNameValidation.value;
-        userState.step = 'admin_lastName';
+        state.firstName = adminFirstNameValidation.value;
+        state.step = 'admin_lastName';
         bot.sendMessage(chatId, 'Введите фамилию пользователя:');
         break;
       case 'admin_lastName':
@@ -191,8 +275,8 @@ bot.on('message', async (msg) => {
           bot.sendMessage(chatId, adminLastNameValidation.message);
           return;
         }
-        userState.lastName = adminLastNameValidation.value;
-        userState.step = 'admin_passport';
+        state.lastName = adminLastNameValidation.value;
+        state.step = 'admin_passport';
         bot.sendMessage(chatId, 'Введите номер паспорта (от 5 до 15 символов, буквы и цифры):');
         break;
       case 'admin_passport':
@@ -201,9 +285,9 @@ bot.on('message', async (msg) => {
           bot.sendMessage(chatId, adminPassportValidation.message);
           return;
         }
-        userState.passportSeries = ''; // Убираем разделение на серию и номер
-        userState.passportNumber = adminPassportValidation.value;
-        userState.step = 'admin_visaExpiry';
+        state.passportSeries = ''; // Убираем разделение на серию и номер
+        state.passportNumber = adminPassportValidation.value;
+        state.step = 'admin_visaExpiry';
         bot.sendMessage(chatId, 'Введите срок действия визы (ГГГГ-ММ-ДД):');
         break;
       case 'admin_visaExpiry':
@@ -215,11 +299,11 @@ bot.on('message', async (msg) => {
         try {
           const userData = {
             telegram_id: Date.now(), // Временный telegram_id
-            phone_number: userState.phone,
-            first_name: userState.firstName,
-            last_name: userState.lastName,
-            passport_series: userState.passportSeries,
-            passport_number: userState.passportNumber,
+            phone_number: state.phone,
+            first_name: state.firstName,
+            last_name: state.lastName,
+            passport_series: state.passportSeries,
+            passport_number: state.passportNumber,
             visa_expiry_date: adminDateValidation.value
           };
           
@@ -236,8 +320,7 @@ bot.on('message', async (msg) => {
                 ['📊 Получить данные'],
                 ['➕ Добавить данные'],
                 ['🔍 Проверка сроков'],
-                
-
+                ['👥 Управление админами']
               ],
               resize_keyboard: true
             }
@@ -251,15 +334,15 @@ bot.on('message', async (msg) => {
     }
   } else {
     // Обработка ввода данных пользователем
-    switch (userState.step) {
+    switch (state.step) {
       case 'phone':
         const phoneValidation = validators.phone(msg.text);
         if (!phoneValidation.isValid) {
           bot.sendMessage(chatId, phoneValidation.message);
           return;
         }
-        userState.phone = phoneValidation.value;
-        userState.step = 'firstName';
+        state.phone = phoneValidation.value;
+        state.step = 'firstName';
         bot.sendMessage(chatId, 'Введите имя:');
         break;
       case 'firstName':
@@ -268,8 +351,8 @@ bot.on('message', async (msg) => {
           bot.sendMessage(chatId, firstNameValidation.message);
           return;
         }
-        userState.firstName = firstNameValidation.value;
-        userState.step = 'lastName';
+        state.firstName = firstNameValidation.value;
+        state.step = 'lastName';
         bot.sendMessage(chatId, 'Введите фамилию:');
         break;
       case 'lastName':
@@ -278,8 +361,8 @@ bot.on('message', async (msg) => {
           bot.sendMessage(chatId, lastNameValidation.message);
           return;
         }
-        userState.lastName = lastNameValidation.value;
-        userState.step = 'passport';
+        state.lastName = lastNameValidation.value;
+        state.step = 'passport';
         bot.sendMessage(chatId, 'Введите номер паспорта (от 5 до 15 символов, буквы и цифры):');
         break;
       case 'passport':
@@ -288,9 +371,9 @@ bot.on('message', async (msg) => {
           bot.sendMessage(chatId, passportValidation.message);
           return;
         }
-        userState.passportSeries = ''; // Убираем разделение на серию и номер
-        userState.passportNumber = passportValidation.value;
-        userState.step = 'visaExpiry';
+        state.passportSeries = ''; // Убираем разделение на серию и номер
+        state.passportNumber = passportValidation.value;
+        state.step = 'visaExpiry';
         bot.sendMessage(chatId, 'Введите срок действия визы (ГГГГ-ММ-ДД):');
         break;
       case 'visaExpiry':
@@ -302,11 +385,11 @@ bot.on('message', async (msg) => {
         try {
           const userData = {
             telegram_id: chatId,
-            phone_number: userState.phone,
-            first_name: userState.firstName,
-            last_name: userState.lastName,
-            passport_series: userState.passportSeries,
-            passport_number: userState.passportNumber,
+            phone_number: state.phone,
+            first_name: state.firstName,
+            last_name: state.lastName,
+            passport_series: state.passportSeries,
+            passport_number: state.passportNumber,
             visa_expiry_date: dateValidation.value
           };
           
@@ -535,6 +618,45 @@ async function checkExpiringVisas(chatId) {
   } catch (error) {
     console.error('Error checking expiring visas:', error);
     bot.sendMessage(chatId, 'Произошла ошибка при проверке сроков виз. Пожалуйста, попробуйте позже.');
+  }
+}
+
+// Функция управления администраторами
+async function handleAdminManagement(chatId) {
+  const keyboard = {
+    reply_markup: {
+      keyboard: [
+        ['➕ Добавить админа'],
+        ['❌ Удалить админа'],
+        ['📋 Список админов'],
+        ['◀️ Назад']
+      ],
+      resize_keyboard: true
+    }
+  };
+  bot.sendMessage(chatId, 'Выберите действие:', keyboard);
+}
+
+// Показ списка администраторов
+async function handleListAdmins(chatId) {
+  try {
+    const admins = await db.getAllAdmins();
+    if (admins.length === 0) {
+      bot.sendMessage(chatId, 'Список администраторов пуст.');
+      return;
+    }
+    
+    const message = 'Список администраторов:\n\n' +
+      admins.map(admin => 
+        `ID: ${admin.telegram_id}\n` +
+        `Username: ${admin.username}\n` +
+        `Добавлен: ${formatDisplayDate(admin.added_at)}\n`
+      ).join('\n');
+    
+    bot.sendMessage(chatId, message);
+  } catch (error) {
+    console.error('Error listing admins:', error);
+    bot.sendMessage(chatId, 'Произошла ошибка при получении списка администраторов. Пожалуйста, попробуйте позже.');
   }
 }
 
