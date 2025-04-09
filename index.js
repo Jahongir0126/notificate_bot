@@ -9,6 +9,9 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 // Состояния пользователей для пошагового ввода
 const userStates = new Map();
 
+// Состояния для подтверждения удаления
+const deleteConfirmations = new Map();
+
 // Функции проверки данных
 const validators = {
   phone: (value) => {
@@ -700,6 +703,101 @@ async function handleListAdmins(chatId) {
     bot.sendMessage(chatId, 'Произошла ошибка при получении списка администраторов. Пожалуйста, попробуйте позже.');
   }
 }
+
+// Обработка команды удаления пользователя
+bot.onText(/\/delete_user (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const isAdmin = await db.isAdmin(chatId);
+  
+  if (!isAdmin) {
+    bot.sendMessage(chatId, 'У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  const searchQuery = match[1].trim();
+  
+  try {
+    // Ищем пользователей по номеру телефона
+    const users = await db.getUserByPhone(searchQuery);
+    
+    if (users.length === 0) {
+      bot.sendMessage(chatId, 'Пользователь с таким номером телефона не найден.');
+      return;
+    }
+    
+    // Формируем сообщение со списком найденных пользователей
+    let message = 'Найдены следующие пользователи:\n\n';
+    users.forEach((user, index) => {
+      message += `${index + 1}. ${user.first_name} ${user.last_name}\n`;
+      message += `Телефон: ${user.phone_number}\n`;
+      message += `Паспорт: ${user.passport_number}\n`;
+      message += `Срок визы: ${formatDisplayDate(user.visa_expiry_date)}\n\n`;
+    });
+    
+    message += 'Для удаления введите номер пользователя из списка или "отмена" для отмены:';
+    
+    // Сохраняем найденных пользователей для подтверждения
+    deleteConfirmations.set(chatId, {
+      users: users,
+      timestamp: Date.now()
+    });
+    
+    bot.sendMessage(chatId, message);
+  } catch (error) {
+    console.error('Error searching users:', error);
+    bot.sendMessage(chatId, 'Произошла ошибка при поиске пользователей.');
+  }
+});
+
+// Обработка подтверждения удаления
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  const confirmation = deleteConfirmations.get(chatId);
+  
+  if (!confirmation) return;
+  
+  // Проверяем, не устарело ли подтверждение (5 минут)
+  if (Date.now() - confirmation.timestamp > 5 * 60 * 1000) {
+    deleteConfirmations.delete(chatId);
+    bot.sendMessage(chatId, 'Время на подтверждение истекло. Повторите команду удаления.');
+    return;
+  }
+  
+  const users = confirmation.users;
+  const userInput = msg.text.trim().toLowerCase();
+  
+  if (userInput === 'отмена') {
+    deleteConfirmations.delete(chatId);
+    bot.sendMessage(chatId, 'Удаление отменено.');
+    return;
+  }
+  
+  const userIndex = parseInt(userInput) - 1;
+  
+  if (isNaN(userIndex) || userIndex < 0 || userIndex >= users.length) {
+    bot.sendMessage(chatId, 'Пожалуйста, введите корректный номер пользователя или "отмена".');
+    return;
+  }
+  
+  const userToDelete = users[userIndex];
+  
+  try {
+    const deletedUser = await db.deleteUser(userToDelete.telegram_id);
+    if (deletedUser) {
+      bot.sendMessage(chatId, `Пользователь успешно удален:\n\n` +
+        `Имя: ${deletedUser.first_name}\n` +
+        `Фамилия: ${deletedUser.last_name}\n` +
+        `Телефон: ${deletedUser.phone_number}\n` +
+        `Паспорт: ${deletedUser.passport_number}\n` +
+        `Срок визы: ${formatDisplayDate(deletedUser.visa_expiry_date)}`);
+    }
+  } catch (error) {
+    console.error('Error deleting user:', error);
+    bot.sendMessage(chatId, 'Произошла ошибка при удалении пользователя.');
+  }
+  
+  deleteConfirmations.delete(chatId);
+});
 
 // Инициализация базы данных при запуске
 db.initDatabase().catch(console.error);

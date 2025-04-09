@@ -194,6 +194,34 @@ async function getAllAdmins() {
   }
 }
 
+// Удаление пользователя по telegram_id
+async function deleteUser(telegramId) {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      'DELETE FROM users WHERE telegram_id = $1 RETURNING *',
+      [telegramId]
+    );
+    return result.rows[0];
+  } finally {
+    client.release();
+  }
+}
+
+// Поиск пользователя по номеру телефона
+async function getUserByPhone(phoneNumber) {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      'SELECT * FROM users WHERE phone_number = $1',
+      [phoneNumber]
+    );
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   initDatabase,
   getAllUsers,
@@ -204,5 +232,7 @@ module.exports = {
   addAdmin,
   removeAdmin,
   isAdmin,
-  getAllAdmins
+  getAllAdmins,
+  deleteUser,
+  getUserByPhone
 }; 
