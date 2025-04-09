@@ -58,7 +58,6 @@ const validators = {
 // Обработка команды /start
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
-  
   const isAdmin = await db.isAdmin(chatId);
   
   // Сбрасываем состояние пользователя при команде /start
@@ -82,7 +81,8 @@ bot.onText(/\/start/, async (msg) => {
       reply_markup: {
         keyboard: [
           ['📝 Добавить данные'],
-          ['👤 Мои данные']
+          ['👤 Мои данные'],
+          ['🔑 Стать администратором']
         ],
         resize_keyboard: true
       }
@@ -136,6 +136,10 @@ bot.on('message', async (msg) => {
       bot.sendMessage(chatId, 'Произошла ошибка при получении данных. Пожалуйста, попробуйте позже.');
       return;
     }
+  } else if (msg.text === '🔑 Стать администратором') {
+    userStates.set(chatId, { step: 'admin_password' });
+    bot.sendMessage(chatId, 'Введите пароль администратора:');
+    return;
   }
   
   if (isAdmin) {
@@ -416,6 +420,43 @@ bot.on('message', async (msg) => {
         }
         break;
     }
+  }
+
+  // Обработка ввода пароля администратора
+  if (state.step === 'admin_password') {
+    const adminPassword = process.env.ADMIN_PASSWORD;
+    if (!adminPassword) {
+      bot.sendMessage(chatId, 'Функция отключена администратором.');
+      userStates.delete(chatId);
+      return;
+    }
+
+    if (msg.text === adminPassword) {
+      try {
+        await db.addAdmin(chatId, msg.from.username || 'unknown', chatId);
+        bot.sendMessage(chatId, 'Поздравляем! Вы стали администратором.');
+        // Показываем админское меню
+        const keyboard = {
+          reply_markup: {
+            keyboard: [
+              ['📊 Получить данные'],
+              ['➕ Добавить данные'],
+              ['🔍 Проверка сроков'],
+              ['👥 Управление админами']
+            ],
+            resize_keyboard: true
+          }
+        };
+        bot.sendMessage(chatId, 'Выберите действие:', keyboard);
+      } catch (error) {
+        console.error('Error adding admin:', error);
+        bot.sendMessage(chatId, 'Произошла ошибка при назначении администратором. Пожалуйста, попробуйте позже.');
+      }
+    } else {
+      bot.sendMessage(chatId, 'Неверный пароль. Попробуйте еще раз или нажмите другую кнопку меню.');
+    }
+    userStates.delete(chatId);
+    return;
   }
 });
 

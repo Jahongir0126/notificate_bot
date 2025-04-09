@@ -8,9 +8,14 @@ services:
     depends_on:
       - db
     environment:
-      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD}@db:5432/visa_bot
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=db
+      - DB_PORT=${DB_PORT}
+      - DB_NAME=${DB_NAME}
       - BOT_TOKEN=${BOT_TOKEN}
       - ADMIN_CHAT_ID=${ADMIN_CHAT_ID}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
     volumes:
       - .:/app
       - /app/node_modules
@@ -20,9 +25,9 @@ services:
     container_name: visa-bot-db
     restart: always
     environment:
-      - POSTGRES_USER=postgres
+      - POSTGRES_USER=${DB_USER}
       - POSTGRES_PASSWORD=${DB_PASSWORD}
-      - POSTGRES_DB=visa_bot
+      - POSTGRES_DB=${DB_NAME}
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
